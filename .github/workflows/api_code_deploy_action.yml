@@ -1,0 +1,87 @@
+name: Antz Deployment
+on:
+  push:
+    branches:
+      - dev-release
+      - uat-release
+      - release/farm
+      - prod-release
+env:
+  ARTIFICATE_DOWNLOAD_GITHUB_TOKEN: ${{ secrets.ARTIFICATE_DOWNLOAD_GITHUB_TOKEN }}
+  SSH_PRIVATE_KEY: ${{secrets.SSH_PRIVATE_KEY}}
+  DEPLOY_SERVER_DEV: ${{vars.DEPLOY_SERVER_DEV}}
+  DEPLOY_SERVER_UAT: ${{vars.DEPLOY_SERVER_UAT}}
+  DEPLOY_SERVER_FARM: ${{vars.DEPLOY_SERVER_FARM}}
+  DEPLOY_SERVER_PROD: ${{vars.DEPLOY_SERVER_PROD}}
+
+jobs:
+  deploy:
+    name: Deploy Antz Project
+    runs-on: ubuntu-latest
+    container: node:18
+    steps:
+      - run: apt-get update -qq
+        name: Update System Repositories
+      - run: apt-get install -qq git
+        name: Install GIT
+      - name: Setup SSH Config in container
+        run: |
+          which ssh-agent || ( apt-get install -qq openssh-client )
+          eval $(ssh-agent -s) && echo "$SSH_PRIVATE_KEY" | tr -d '\r' | ssh-add - > /dev/null
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+      - name: Add Dev Servers To KNOWN HOSTS
+        run: ssh-keyscan $DEPLOY_SERVER_DEV >> ~/.ssh/known_hosts
+      - name: Add Staging Servers To KNOWN HOSTS
+        run: ssh-keyscan $DEPLOY_SERVER_UAT >> ~/.ssh/known_hosts
+      - name: Add Farm Servers To KNOWN HOSTS
+        run: ssh-keyscan $DEPLOY_SERVER_FARM >> ~/.ssh/known_hosts
+      - name: Add Production Servers To KNOWN HOSTS
+        run: ssh-keyscan $DEPLOY_SERVER_PROD >> ~/.ssh/known_hosts
+      - run: chmod 644 ~/.ssh/known_hosts
+        name: UPDATE PERMISSION OF KNOWN HOSTS
+      - name: Checkout CodeBase
+        uses: actions/checkout@v3
+      - name: Install Dependencies (Node.js & GIT)
+        run: |
+          apt-get install -qq git nodejs
+          npm install -g npm@latest  # Optional: Update npm to latest
+      - name: Install Next.js Dependencies
+        run: npm install # Install project dependencies
+      - name: Copy environment file for dev-release
+        if: github.ref == 'refs/heads/dev-release'
+        run: |
+          rm -r .env
+          cp -r env.development .env
+
+      - name: Copy environment file for uat-release
+        if: github.ref == 'refs/heads/uat-release'
+        run: |
+          rm -r .env
+          cp -r env.uat .env
+
+      - name: Copy environment file for prod-release
+        if: github.ref == 'refs/heads/prod-release'
+        run: |
+          rm -r .env
+          cp -r env.production .env
+
+      - name: Copy environment file for release/farm
+        if: github.ref == 'refs/heads/release/farm'
+        run: |
+          rm -r .env
+          cp -r env.farm .env
+      - name: Build Next.js Application (Optimize for memory)
+        run: |
+          cat .env
+          npm run build
+      - name: Upload Next.js Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nextjs-build-output # Customize this name if needed
+          path: .next # Replace with the path to your build output directory
+          retention-days: 1
+          include-hidden-files: true
+      - name: Trigger Deploy Script
+        run: |
+          chmod u+x deploy/
+          bash deploy/deploy.sh
